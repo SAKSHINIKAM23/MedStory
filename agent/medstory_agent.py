@@ -223,7 +223,7 @@ def create_placeholder_image(
     img.save(str(output_path))
 
 
-async def generate_scene_images(scenes: list) -> list:
+async def generate_scene_images(scenes: list, on_scene_done: typing.Callable[[int], None] | None = None) -> list:  # type: ignore
     output_dir = Path(tempfile.mkdtemp(prefix="medstory_images_"))
     
     try:
@@ -242,7 +242,6 @@ async def generate_scene_images(scenes: list) -> list:
                 "Clean vector-style diagram, pastel colors, professional medical "
                 "textbook style, no text overlays, educational infographic aesthetic."
             )
-            # Check cache first
             if scene['image_prompt'] in image_cache:
                 print(f"  ⚡ Using cached image for scene {scene['scene_number']}")
                 with open(img_path, "wb") as f:
@@ -252,11 +251,8 @@ async def generate_scene_images(scenes: list) -> list:
                 try:
                     def _generate():  # type: ignore
                         return imagen.generate_images(  # type: ignore
-                            prompt=prompt,
-                            number_of_images=1,
-                            aspect_ratio="16:9",
-                            safety_filter_level="block_some",
-                            person_generation="dont_allow",
+                            prompt=prompt, number_of_images=1, aspect_ratio="16:9",
+                            safety_filter_level="block_some", person_generation="dont_allow",
                         )
                     images = await asyncio.to_thread(_generate)  # type: ignore
                     def _save(img: "Any") -> None:  # type: ignore
@@ -270,26 +266,21 @@ async def generate_scene_images(scenes: list) -> list:
         if not success:
             print(f"  Using placeholder for scene {scene['scene_number']}")
             create_placeholder_image(
-                scene["scene_number"],
-                scene["title"],
-                scene.get("narration", ""),
-                img_path,
-                total_scenes=5,
+                scene["scene_number"], scene["title"],
+                scene.get("narration", ""), img_path, total_scenes=len(scenes),
             )
 
         def _read_b64(*args: typing.Any, **kwargs: typing.Any) -> str:
             with open(img_path, "rb") as f:
                 return base64.b64encode(f.read()).decode()
-        
         b64 = await asyncio.to_thread(_read_b64)  # type: ignore
         scene_copy = dict(scene)
         scene_copy["image_base64"] = b64
         scene_copy["image_path"] = str(img_path)
-        
-        # Save to cache on success
         if success and scene['image_prompt'] not in image_cache:
             image_cache[scene['image_prompt']] = b64
-
+        if on_scene_done:
+            on_scene_done(scene["scene_number"])
         return scene_copy
 
     tasks = [_process_scene_image(scene) for scene in scenes]
@@ -297,11 +288,9 @@ async def generate_scene_images(scenes: list) -> list:
     return list(enriched)
 
 
-async def generate_narration(scenes: list) -> list:
+async def generate_narration(scenes: list, on_scene_done: typing.Callable[[int], None] | None = None) -> list:  # type: ignore
     client = texttospeech.TextToSpeechClient()
     output_dir = Path(tempfile.mkdtemp(prefix="medstory_audio_"))
-
-    # Try Journey-F first, fall back to Neural2-F if it fails
     voice_configs = [
         {"name": "en-US-Journey-F", "pitch": None},
         {"name": "en-US-Neural2-F", "pitch": -1.0},
@@ -312,21 +301,15 @@ async def generate_narration(scenes: list) -> list:
         synthesis_input = texttospeech.SynthesisInput(text=scene["narration"])
         audio_path = output_dir / f"scene_{scene['scene_number']:02d}.mp3"
         success = False
-
         for vc in voice_configs:
             try:
                 voice = texttospeech.VoiceSelectionParams(
-                    language_code="en-US",
-                    name=vc["name"],
+                    language_code="en-US", name=vc["name"],
                     ssml_gender=texttospeech.SsmlVoiceGender.FEMALE,
                 )
-                audio_config_params = {
-                    "audio_encoding": texttospeech.AudioEncoding.MP3,
-                    "speaking_rate": 0.9,
-                }
+                audio_config_params: dict = {"audio_encoding": texttospeech.AudioEncoding.MP3, "speaking_rate": 0.9}
                 if vc["pitch"] is not None:
                     audio_config_params["pitch"] = vc["pitch"]
-
                 audio_config = texttospeech.AudioConfig(**audio_config_params)
                 def _synth():  # type: ignore
                     return client.synthesize_speech(
@@ -337,23 +320,22 @@ async def generate_narration(scenes: list) -> list:
                     with open(audio_path, "wb") as f:
                         f.write(response.audio_content)  # type: ignore
                 await asyncio.to_thread(_write_audio)  # type: ignore
-                print(f"  ✅ Narration generated for scene {scene['scene_number']} using {vc['name']}")
+                print(f"  ✅ Narration for scene {scene['scene_number']} via {vc['name']}")
                 success = True
                 break
             except Exception as e:
                 print(f"  [WARN] Voice {vc['name']} failed: {e}")
 
         if not success:
-            print(f"  [ERROR] All voices failed for scene {scene['scene_number']}")
             return {**scene, "audio_base64": "", "audio_path": ""}
 
         def _read_b64(*args: typing.Any, **kwargs: typing.Any) -> str:
             with open(audio_path, "rb") as f:
                 return base64.b64encode(f.read()).decode()
         b64 = await asyncio.to_thread(_read_b64)  # type: ignore
-        scene_copy = dict(scene)
-        scene_copy["audio_base64"] = b64
-        scene_copy["audio_path"] = str(audio_path)
+        scene_copy = {**scene, "audio_base64": b64, "audio_path": str(audio_path)}
+        if on_scene_done:
+            on_scene_done(scene["scene_number"])
         return scene_copy
 
     tasks = [_process_scene_audio(scene) for scene in scenes]
@@ -361,7 +343,11 @@ async def generate_narration(scenes: list) -> list:
     return list(enriched)
 
 
-async def assemble_video(title: str, scenes: list) -> dict:
+async def assemble_video(
+    title: str,
+    scenes: list,
+    on_clip_done: typing.Callable[[int], None] | None = None,  # type: ignore
+) -> dict:
     output_dir = Path(tempfile.mkdtemp(prefix="medstory_video_"))
     final_video = output_dir / "explainer.mp4"
     FADE = 0.6   # crossfade duration in seconds
@@ -384,25 +370,13 @@ async def assemble_video(title: str, scenes: list) -> dict:
             )
         probe = await asyncio.to_thread(_ffprobe)  # type: ignore
         duration = float(probe.stdout.strip() or "10")
-        clip_dur = duration + 0.8   # small tail so audio doesn't cut
+        clip_dur = duration + 0.5
+        fps = 24
 
-        # Ken Burns: slow pan+zoom from 110% down to 100% over clip duration
-        zoom_speed = 0.0006          # pixels-per-frame zoom rate
-        fps = 25
-        total_frames = int(clip_dur * fps)
-
-        # Compute zoom so image starts at 110% and ends at 100%
-        zoom_expr = (
-            f"min(1.10,1.10-{zoom_speed:.6f}*(on-1))"
-        )
-        ken_burns = (
-            f"scale=8000:-1,"
-            f"zoompan=z='{zoom_expr}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-            f":d={total_frames}:s=1920x1080:fps={fps},"
-            f"scale=1920:1080,setsar=1"
-        )
+        # Simple scale+pad to 1280x720 + fade in/out (4-8x faster than zoompan)
         vf = (
-            f"{ken_burns},"
+            f"scale=1280:720:force_original_aspect_ratio=increase,"
+            f"crop=1280:720,setsar=1,"
             f"fade=t=in:st=0:d={FADE},"
             f"fade=t=out:st={max(0.0, clip_dur - FADE):.3f}:d={FADE}"
         )
@@ -420,10 +394,9 @@ async def assemble_video(title: str, scenes: list) -> dict:
                 "-framerate", str(fps),
                 "-i", img_path,
                 "-i", audio_path,
-                "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-                "-c:a", "aac", "-b:a", "192k",
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
+                "-c:a", "aac", "-b:a", "128k",
                 "-pix_fmt", "yuv420p",
-                "-movflags", "+faststart",
                 "-t", str(dur),
                 "-vf", vf_str,
                 out,
@@ -431,7 +404,10 @@ async def assemble_video(title: str, scenes: list) -> dict:
 
         await asyncio.to_thread(_build_clip)  # type: ignore
         scene_clips.append(clip_path)
-        print(f"  ✅ Clip assembled for scene {scene['scene_number']}")
+        print(f"  ✅ Clip encoded for scene {scene['scene_number']}")
+        if on_clip_done:
+            cb = on_clip_done  # narrow type for Pyre
+            cb(scene["scene_number"])  # type: ignore
 
     if not scene_clips:
         return {"video_path": "", "video_base64": ""}

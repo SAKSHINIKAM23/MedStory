@@ -44,23 +44,44 @@ async def run_generation_job(job_id: str, procedure: str):
         generate_scene_script, generate_scene_images,
         generate_narration, assemble_video,
     )
+
+    def update(step: str, pct: int) -> None:
+        jobs[job_id].update({"current_step": step, "progress": pct})
+
     try:
         jobs[job_id]["status"] = "processing"
-        jobs[job_id].update({"current_step": "Generating scene script...", "progress": 10})
+        update("Generating scene script with AI...", 5)
         script = await generate_scene_script(procedure)
+        total = len(script["scenes"])
 
-        jobs[job_id].update({"current_step": "Creating medical diagrams...", "progress": 30})
-        scenes_with_images = await generate_scene_images(script["scenes"])
+        # ── Images: progress 10 → 50 per scene ─────────────
+        update(f"Creating visuals for scene 1 of {total}...", 10)
+        def img_callback(scene_num: int) -> None:
+            pct = 10 + int((scene_num / total) * 40)
+            update(f"Creating visuals for scene {scene_num} of {total}...", pct)
 
-        jobs[job_id].update({"current_step": "Synthesizing narration...", "progress": 60})
-        scenes_full = await generate_narration(scenes_with_images)
+        scenes_with_images = await generate_scene_images(script["scenes"], img_callback)
 
-        jobs[job_id].update({"current_step": "Assembling video...", "progress": 85})
-        video_result = await assemble_video(script["title"], scenes_full)
+        # ── Audio: progress 50 → 80 per scene ─────────────
+        update(f"Synthesising narration for scene 1 of {total}...", 50)
+        def audio_callback(scene_num: int) -> None:
+            pct = 50 + int((scene_num / total) * 30)
+            update(f"Synthesising narration for scene {scene_num} of {total}...", pct)
 
+        scenes_full = await generate_narration(scenes_with_images, audio_callback)
+
+        # ── Video assembly: 80 → 95 ───────────────────────
+        def video_callback(scene_num: int) -> None:
+            pct = 80 + int((scene_num / total) * 15)
+            update(f"Encoding clip {scene_num} of {total}...", pct)
+
+        update("Assembling final video...", 80)
+        video_result = await assemble_video(script["title"], scenes_full, video_callback)
+
+        update("Finalising...", 98)
         jobs[job_id].update({
             "status": "complete", "progress": 100, "current_step": "Done!",
-            "_video_path": video_result.get("video_path", ""),   # internal, not sent to client
+            "_video_path": video_result.get("video_path", ""),
             "result": {
                 "procedure": procedure,
                 "title": script["title"],
@@ -75,13 +96,14 @@ async def run_generation_job(job_id: str, procedure: str):
                     }
                     for s in scenes_full
                 ],
-                # video_base64 intentionally omitted — use /jobs/{id}/video endpoint instead
                 "video_url": f"/jobs/{job_id}/video",
                 "disclaimer": "For patient education only. Not medical advice.",
             },
         })
     except Exception as e:
-        jobs[job_id].update({"status": "error", "progress": 0, "current_step": "Error", "error": str(e)})
+        import traceback; traceback.print_exc()
+        jobs[job_id].update({"status": "error", "progress": 0,
+                             "current_step": "Error", "error": str(e)})
 
 
 @app.get("/health")

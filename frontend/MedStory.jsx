@@ -58,7 +58,7 @@ export default function MedStory() {
         clearInterval(pollRef.current);
         if (j.status === "complete") setPhase("result");
       }
-    }, 5000);
+    }, 2000);  // poll every 2s for live per-scene updates
   }
 
   function reset() {
@@ -391,10 +391,7 @@ export default function MedStory() {
               Building <em style={{ color: "var(--teal)" }}>{procedure}</em> explainer
             </h2>
             <p style={{ color: "var(--ink-muted)", marginBottom: 32, fontSize: 14 }}>
-              {job?.progress < 20 ? "Generating script..." :
-               job?.progress < 60 ? "Creating visuals and narration..." :
-               job?.progress < 100 ? "Rendering video..." :
-               "Finishing up..."}
+              {job?.current_step || "Initialising..."}
             </p>
 
             {/* Progress bar */}
