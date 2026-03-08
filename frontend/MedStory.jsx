@@ -458,12 +458,16 @@ export default function MedStory() {
               border: "1.5px solid #2a2a2a",
               boxShadow: "0 20px 60px rgba(0,0,0,.18)",
             }}>
-              {job.result.video_base64 ? (
+              {job.result.video_url ? (
                 <video
-                  src={`data:video/mp4;base64,${job.result.video_base64}`}
+                  key={job.result.video_url}
+                  src={`${API_BASE}${job.result.video_url}`}
                   controls
                   autoPlay
+                  playsInline
+                  preload="auto"
                   style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  onError={e => console.error("Video load error:", e)}
                 />
               ) : job.result.scenes[activeScene]?.image_base64 ? (
                 <img
@@ -482,6 +486,7 @@ export default function MedStory() {
                 position: "absolute", bottom: 0, left: 0, right: 0,
                 background: "linear-gradient(transparent, rgba(0,0,0,.82))",
                 padding: "48px 24px 20px",
+                pointerEvents: "none",
               }}>
                 <div style={{ fontWeight: 700, fontSize: 17, color: "white", marginBottom: 5 }}>
                   {job.result.scenes[activeScene]?.title}
@@ -503,16 +508,19 @@ export default function MedStory() {
                 ))}
               </div>
 
-              {/* Download */}
-              {job.result.video_base64 && (
-                <a href={`data:video/mp4;base64,${job.result.video_base64}`} download="explainer.mp4"
+              {/* Download button - streams directly from server */}
+              {job.result.video_url && (
+                <a
+                  href={`${API_BASE}${job.result.video_url}`}
+                  download="medstory_explainer.mp4"
                   style={{
                     position: "absolute", top: 14, right: 14,
                     padding: "8px 16px", borderRadius: 9,
                     background: "rgba(255,255,255,.12)", backdropFilter: "blur(8px)",
                     border: "1px solid rgba(255,255,255,.2)",
                     color: "white", fontSize: 13, textDecoration: "none", fontWeight: 600,
-                  }}>
+                  }}
+                >
                   ⬇ Download MP4
                 </a>
               )}

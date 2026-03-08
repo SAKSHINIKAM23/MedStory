@@ -7,8 +7,9 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -59,6 +60,7 @@ async def run_generation_job(job_id: str, procedure: str):
 
         jobs[job_id].update({
             "status": "complete", "progress": 100, "current_step": "Done!",
+            "_video_path": video_result.get("video_path", ""),   # internal, not sent to client
             "result": {
                 "procedure": procedure,
                 "title": script["title"],
@@ -73,7 +75,8 @@ async def run_generation_job(job_id: str, procedure: str):
                     }
                     for s in scenes_full
                 ],
-                "video_base64": video_result.get("video_base64", ""),
+                # video_base64 intentionally omitted — use /jobs/{id}/video endpoint instead
+                "video_url": f"/jobs/{job_id}/video",
                 "disclaimer": "For patient education only. Not medical advice.",
             },
         })
@@ -100,6 +103,70 @@ async def get_job_status(job_id: str):
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found.")
     return JobStatus(**jobs[job_id])
+
+@app.get("/jobs/{job_id}/video")
+async def stream_video(job_id: str, request: Request):
+    """Stream the generated MP4 with byte-range support for proper browser seeking."""
+    import os
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    job = jobs[job_id]
+    if job.get("status") != "complete":
+        raise HTTPException(status_code=425, detail="Video not ready yet.")
+    video_path = job.get("_video_path", "")
+    if not video_path or not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Video file not found on server.")
+
+    file_size = os.path.getsize(video_path)
+    range_header = request.headers.get("range")
+
+    def _iter_file(start: int, end: int):
+        with open(video_path, "rb") as f:
+            f.seek(start)
+            remaining = end - start + 1
+            chunk_size = 1024 * 256  # 256 KB chunks
+            while remaining > 0:
+                data = f.read(min(chunk_size, remaining))
+                if not data:
+                    break
+                remaining -= len(data)
+                yield data
+
+    if range_header:
+        # Partial content (seek support)
+        try:
+            range_val = range_header.replace("bytes=", "")
+            start_str, end_str = range_val.split("-")
+            start = int(start_str)
+            end = int(end_str) if end_str else file_size - 1
+        except Exception:
+            raise HTTPException(status_code=416, detail="Invalid Range header.")
+        end = min(end, file_size - 1)
+        content_length = end - start + 1
+        return StreamingResponse(
+            _iter_file(start, end),
+            status_code=206,
+            media_type="video/mp4",
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(content_length),
+                "Cache-Control": "no-cache",
+            },
+        )
+    else:
+        # Full file
+        return StreamingResponse(
+            _iter_file(0, file_size - 1),
+            status_code=200,
+            media_type="video/mp4",
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_size),
+                "Cache-Control": "no-cache",
+            },
+        )
+
 
 @app.get("/procedures/suggestions")
 async def suggest_procedures():
