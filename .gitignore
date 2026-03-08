@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+ENV/
+env/
+
+# Node / Frontend
+node_modules/
+dist/
+.cache/
+.parcel-cache/
+
+# Environment
+.env
+.env.*
+*.env
+
+# Temp / generated files
+/tmp/
+medstory_images_*/
+medstory_audio_*/
+medstory_video_*/
+medexplain_images_*/
+medexplain_audio_*/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Logs
+*.log
+npm-debug.log*
