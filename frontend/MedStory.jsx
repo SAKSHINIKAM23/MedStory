@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 
-const API_BASE = import.meta.env?.VITE_API_BASE || "https://medexplain-api-45cfuefiba-uc.a.run.app";
+const API_BASE = import.meta.env?.VITE_API_BASE || "http://localhost:8080";
 
 const SUGGESTIONS = [
   "Appendectomy","Knee Replacement","Cataract Surgery",
